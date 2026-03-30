@@ -11,15 +11,12 @@
     ],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
-    "isolatedModules": true,
-    "moduleDetection": "force",
-    "allowJs": true,
-    "jsx": "react-jsx",
+    "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["src/*"]
     },
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
     "allowImportingTsExtensions": true,
     "noEmit": true
   }
