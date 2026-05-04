@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { FileUpload } from "./components/FileUpload";
 import { ColorInput } from "./components/ColorInput";
 import { Section } from "./components/Section";
@@ -71,6 +71,38 @@ const PLACEHOLDER_PDF_GROUPS = [
   },
 ];
 
+const REQUIRED_FIELDS = [
+  { key: "brand_name", label: "Brand Name", section: "brand" },
+  { key: "brand_logo_url", label: "Brand Logo", section: "brand" },
+  { key: "brand_hero_image_url", label: "Brand Hero Image", section: "brand" },
+  { key: "about_client_about", label: "About Client", section: "about" },
+  { key: "typography_primary_font_name", label: "Primary Font Name", section: "typography" },
+  { key: "typography_download_fonts", label: "Font Files (Zip)", section: "typography" },
+] as const;
+
+const REQUIRED_SECTIONS = new Set(["brand", "about", "typography"]);
+
+const DRAFT_KEY = "prismscale-branding-draft";
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatDraftTime(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 1) return "1 min ago";
+  if (minutes < 60) return `${minutes} mins ago`;
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 const createEmptyPlaceholder = (): PlaceholderSection => {
   const base: PlaceholderSection = {
     id: "",
@@ -105,30 +137,84 @@ const placeholderHasContent = (section: PlaceholderSection) =>
   Object.values(section).some((value) => value?.trim().length > 0);
 
 export default function App() {
-  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [formData, setFormData] = useState<Record<string, string>>(
+    () => (loadDraft()?.formData as Record<string, string>) ?? {},
+  );
   const [sectionOrder, setSectionOrder] = useState<string[]>(
-    DEFAULT_SECTION_ORDER,
+    () => (loadDraft()?.sectionOrder as string[]) ?? DEFAULT_SECTION_ORDER,
   );
   const [sectionLabels, setSectionLabels] = useState<Record<string, string>>(
-    DEFAULT_SECTION_LABELS,
+    () =>
+      (loadDraft()?.sectionLabels as Record<string, string>) ??
+      DEFAULT_SECTION_LABELS,
   );
   const [sectionVisibility, setSectionVisibility] = useState<
     Record<string, boolean>
-  >(DEFAULT_SECTION_VISIBILITY);
+  >(
+    () =>
+      (loadDraft()?.sectionVisibility as Record<string, boolean>) ??
+      DEFAULT_SECTION_VISIBILITY,
+  );
   const [placeholderSections, setPlaceholderSections] = useState<
     PlaceholderSection[]
-  >([]);
+  >(() => (loadDraft()?.placeholderSections as PlaceholderSection[]) ?? []);
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<{
     status: string;
     s3_url: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [draftSavedAt, setDraftSavedAt] = useState<Date | null>(null);
+  const [showDraftBanner, setShowDraftBanner] = useState(
+    () => !!localStorage.getItem(DRAFT_KEY),
+  );
   const [draggedSection, setDraggedSection] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<string | null>(null);
 
   const handleInputChange = (key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
+    if (validationErrors[key]) {
+      setValidationErrors((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          DRAFT_KEY,
+          JSON.stringify({
+            formData,
+            sectionOrder,
+            sectionLabels,
+            sectionVisibility,
+            placeholderSections,
+            savedAt: new Date().toISOString(),
+          }),
+        );
+        setDraftSavedAt(new Date());
+      } catch {
+        // localStorage unavailable (private browsing quota, etc.)
+      }
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [formData, sectionOrder, sectionLabels, sectionVisibility, placeholderSections]);
+
+  const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY);
+    setFormData({});
+    setSectionOrder(DEFAULT_SECTION_ORDER);
+    setSectionLabels(DEFAULT_SECTION_LABELS);
+    setSectionVisibility(DEFAULT_SECTION_VISIBILITY);
+    setPlaceholderSections([]);
+    setValidationErrors({});
+    setDraftSavedAt(null);
+    setShowDraftBanner(false);
   };
 
   const toggleSectionVisibility = (id: string) => {
@@ -225,8 +311,40 @@ export default function App() {
     setPlaceholderSections((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const validateForm = (): boolean => {
+    const errors: Record<string, string> = {};
+    for (const { key, label } of REQUIRED_FIELDS) {
+      if (!formData[key]?.trim()) {
+        errors[key] = `${label} is required`;
+      }
+    }
+    setValidationErrors(errors);
+
+    if (Object.keys(errors).length > 0) {
+      const sectionsWithErrors = new Set(
+        REQUIRED_FIELDS.filter((f) => errors[f.key]).map((f) => f.section),
+      );
+      setSectionVisibility((prev) => {
+        const next = { ...prev };
+        sectionsWithErrors.forEach((s) => { next[s] = true; });
+        return next;
+      });
+      const firstErrorKey = REQUIRED_FIELDS.find((f) => errors[f.key])?.key;
+      if (firstErrorKey) {
+        setTimeout(() => {
+          document
+            .getElementById(`field-${firstErrorKey}`)
+            ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 50);
+      }
+      return false;
+    }
+    return true;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateForm()) return;
     setGenerating(true);
     setError(null);
     setResult(null);
@@ -274,9 +392,9 @@ export default function App() {
       case "brand":
         return (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
+            <div id="field-brand_name">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Brand Name
+                Brand Name <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
@@ -284,30 +402,55 @@ export default function App() {
                 onChange={(e) =>
                   handleInputChange("brand_name", e.target.value)
                 }
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
+                  validationErrors.brand_name
+                    ? "border-red-400 ring-1 ring-red-300"
+                    : "border-gray-300"
+                }`}
                 placeholder="e.g. Acme Corp"
-                required
               />
+              {validationErrors.brand_name && (
+                <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  {validationErrors.brand_name}
+                </p>
+              )}
             </div>
-            <FileUpload
-              label="Brand Logo URL"
-              fieldKey="brand_logo_url"
-              onUploadComplete={handleInputChange}
-              currentUrl={formData.brand_logo_url}
-            />
-            <FileUpload
-              label="Brand Hero Image URL"
-              fieldKey="brand_hero_image_url"
-              onUploadComplete={handleInputChange}
-              currentUrl={formData.brand_hero_image_url}
-            />
+            <div id="field-brand_logo_url">
+              <FileUpload
+                label="Brand Logo *"
+                fieldKey="brand_logo_url"
+                onUploadComplete={handleInputChange}
+                currentUrl={formData.brand_logo_url}
+              />
+              {validationErrors.brand_logo_url && (
+                <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  {validationErrors.brand_logo_url}
+                </p>
+              )}
+            </div>
+            <div id="field-brand_hero_image_url">
+              <FileUpload
+                label="Brand Hero Image *"
+                fieldKey="brand_hero_image_url"
+                onUploadComplete={handleInputChange}
+                currentUrl={formData.brand_hero_image_url}
+              />
+              {validationErrors.brand_hero_image_url && (
+                <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  {validationErrors.brand_hero_image_url}
+                </p>
+              )}
+            </div>
           </div>
         );
       case "about":
         return (
-          <div>
+          <div id="field-about_client_about">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              About Client
+              About Client <span className="text-red-500">*</span>
             </label>
             <textarea
               value={formData.about_client_about || ""}
@@ -315,9 +458,19 @@ export default function App() {
                 handleInputChange("about_client_about", e.target.value)
               }
               rows={4}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
+                validationErrors.about_client_about
+                  ? "border-red-400 ring-1 ring-red-300"
+                  : "border-gray-300"
+              }`}
               placeholder="Describe the client..."
             />
+            {validationErrors.about_client_about && (
+              <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                <AlertCircle className="h-3 w-3 shrink-0" />
+                {validationErrors.about_client_about}
+              </p>
+            )}
           </div>
         );
       case "logo":
@@ -489,9 +642,9 @@ export default function App() {
       case "typography":
         return (
           <div className="grid grid-cols-1 gap-6">
-            <div>
+            <div id="field-typography_primary_font_name">
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Primary Font Name
+                Primary Font Name <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
@@ -502,17 +655,35 @@ export default function App() {
                     e.target.value,
                   )
                 }
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 ${
+                  validationErrors.typography_primary_font_name
+                    ? "border-red-400 ring-1 ring-red-300"
+                    : "border-gray-300"
+                }`}
                 placeholder="e.g. Inter"
               />
+              {validationErrors.typography_primary_font_name && (
+                <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  {validationErrors.typography_primary_font_name}
+                </p>
+              )}
             </div>
-            <FileUpload
-              label="Download Fonts (Zip)"
-              fieldKey="typography_download_fonts"
-              onUploadComplete={handleInputChange}
-              currentUrl={formData.typography_download_fonts}
-              accept=".zip"
-            />
+            <div id="field-typography_download_fonts">
+              <FileUpload
+                label="Download Fonts (Zip) *"
+                fieldKey="typography_download_fonts"
+                onUploadComplete={handleInputChange}
+                currentUrl={formData.typography_download_fonts}
+                accept=".zip"
+              />
+              {validationErrors.typography_download_fonts && (
+                <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  {validationErrors.typography_download_fonts}
+                </p>
+              )}
+            </div>
           </div>
         );
       case "illustrations":
@@ -683,6 +854,19 @@ export default function App() {
         </div>
 
         <form id="branding-form" onSubmit={handleSubmit} className="space-y-6">
+          {showDraftBanner && (
+            <div className="flex items-center justify-between rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <span>Draft restored — your previous progress has been loaded.</span>
+              <button
+                type="button"
+                onClick={clearDraft}
+                className="ml-4 shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+              >
+                Start fresh
+              </button>
+            </div>
+          )}
+
           <Section
             title="Placeholder sections"
             description="Add temporary cards with reference content."
@@ -1080,6 +1264,11 @@ export default function App() {
                         <span className="text-xs text-gray-400">
                           #{index + 1}
                         </span>
+                        {REQUIRED_SECTIONS.has(sectionId) && (
+                          <span className="text-xs font-medium text-red-500 bg-red-50 border border-red-200 px-2 py-0.5 rounded-full">
+                            Required
+                          </span>
+                        )}
                       </div>
                     }
                     description={
@@ -1142,10 +1331,31 @@ export default function App() {
         </form>
 
         <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 shadow-lg flex justify-end items-center gap-4 z-50">
-          {error && (
+          {Object.keys(validationErrors).length > 0 && (
+            <div className="flex items-center text-red-600 text-sm mr-auto">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              {Object.keys(validationErrors).length === 1
+                ? "1 required field is missing"
+                : `${Object.keys(validationErrors).length} required fields are missing`}
+            </div>
+          )}
+          {error && Object.keys(validationErrors).length === 0 && (
             <div className="flex items-center text-red-600 text-sm mr-auto">
               <AlertCircle className="w-4 h-4 mr-2" />
               {error}
+            </div>
+          )}
+          {draftSavedAt && Object.keys(validationErrors).length === 0 && !error && (
+            <div className="mr-auto flex items-center gap-3 text-sm text-gray-500">
+              <CheckCircle className="h-4 w-4 text-green-500" />
+              Draft saved {formatDraftTime(draftSavedAt)}
+              <button
+                type="button"
+                onClick={clearDraft}
+                className="text-xs text-gray-400 underline underline-offset-2 hover:text-gray-600"
+              >
+                Clear
+              </button>
             </div>
           )}
           <button
@@ -1171,7 +1381,7 @@ export default function App() {
         </div>
 
         {result && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-[60]">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-60">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
