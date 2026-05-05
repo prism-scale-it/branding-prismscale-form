@@ -5,6 +5,7 @@ import { Section } from "./components/Section";
 import {
   AlertCircle,
   CheckCircle,
+  ExternalLink,
   Loader2,
   Plus,
   Trash2,
@@ -81,6 +82,13 @@ const REQUIRED_FIELDS = [
 ] as const;
 
 const REQUIRED_SECTIONS = new Set(["brand", "about", "typography"]);
+
+// Matches lambda_function.py _sanitize_brand_name exactly
+function sanitizeBrandName(name: string): string {
+  return name.replace(/[^a-z0-9]/gi, "_").replace(/^_+|_+$/g, "").toLowerCase() || "brand";
+}
+
+const S3_BRAND_BASE = "https://prismscales3.s3.amazonaws.com/branding-prismscale";
 
 const DRAFT_KEY = "prismscale-branding-draft";
 
@@ -162,6 +170,7 @@ export default function App() {
   const [result, setResult] = useState<{
     status: string;
     s3_url: string;
+    vars_url?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
@@ -171,6 +180,29 @@ export default function App() {
   );
   const [draggedSection, setDraggedSection] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<string | null>(null);
+  const [loadClientName, setLoadClientName] = useState('');
+  const [loadClientStatus, setLoadClientStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [loadClientError, setLoadClientError] = useState<string | null>(null);
+  const [pageCheckStatus, setPageCheckStatus] = useState<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+  const [copiedUrl, setCopiedUrl] = useState<'s3' | 'vars' | null>(null);
+
+  useEffect(() => {
+    const trimmed = loadClientName.trim();
+    if (!trimmed) {
+      setPageCheckStatus('idle');
+      return;
+    }
+    setPageCheckStatus('checking');
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/load-client?brand=${encodeURIComponent(trimmed)}`);
+        setPageCheckStatus(res.ok ? 'found' : 'not-found');
+      } catch {
+        setPageCheckStatus('not-found');
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [loadClientName]);
 
   const handleInputChange = (key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
@@ -215,6 +247,55 @@ export default function App() {
     setValidationErrors({});
     setDraftSavedAt(null);
     setShowDraftBanner(false);
+  };
+
+  const copyToClipboard = (text: string, which: 's3' | 'vars') => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedUrl(which);
+      setTimeout(() => setCopiedUrl(null), 2000);
+    });
+  };
+
+  const handleLoadClient = async () => {
+    const trimmed = loadClientName.trim();
+    if (!trimmed) return;
+    setLoadClientStatus('loading');
+    setLoadClientError(null);
+    try {
+      const res = await fetch(`/api/load-client?brand=${encodeURIComponent(trimmed)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to load client');
+      }
+      const vars: Record<string, unknown> = await res.json();
+
+      const incomingOrder = vars.section_order as string[] | undefined;
+      if (incomingOrder) {
+        setSectionOrder(incomingOrder);
+        const visibleSet = new Set(incomingOrder);
+        setSectionVisibility(
+          DEFAULT_SECTION_ORDER.reduce<Record<string, boolean>>(
+            (acc, id) => { acc[id] = visibleSet.has(id); return acc; },
+            {},
+          ),
+        );
+      }
+
+      const incomingLabels = vars.section_labels as Record<string, string> | undefined;
+      if (incomingLabels) setSectionLabels({ ...DEFAULT_SECTION_LABELS, ...incomingLabels });
+
+      setPlaceholderSections((vars.placeholder_sections as PlaceholderSection[]) ?? []);
+
+      const { section_order: _o, section_labels: _l, placeholder_sections: _p, ...rest } = vars;
+      setFormData(rest as Record<string, string>);
+
+      setValidationErrors({});
+      setLoadClientStatus('success');
+      setTimeout(() => setLoadClientStatus('idle'), 2000);
+    } catch (err) {
+      setLoadClientError(err instanceof Error ? err.message : 'Unknown error');
+      setLoadClientStatus('error');
+    }
   };
 
   const toggleSectionVisibility = (id: string) => {
@@ -867,6 +948,72 @@ export default function App() {
             </div>
           )}
 
+          {/* Load existing client */}
+          <div className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+            <label htmlFor="load-client-input" className="shrink-0 text-sm font-medium text-gray-700">
+              Load Client
+            </label>
+            <input
+              id="load-client-input"
+              type="text"
+              value={loadClientName}
+              onChange={(e) => {
+                setLoadClientName(e.target.value);
+                setLoadClientStatus('idle');
+                setLoadClientError(null);
+                if (!e.target.value.trim()) setPageCheckStatus('idle');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); handleLoadClient(); }
+              }}
+              placeholder="Enter brand name…"
+              className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+              disabled={loadClientStatus === 'loading'}
+            />
+            <button
+              type="button"
+              onClick={handleLoadClient}
+              disabled={loadClientStatus === 'loading' || !loadClientName.trim()}
+              className="shrink-0 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loadClientStatus === 'loading' ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading…
+                </span>
+              ) : (
+                'Load'
+              )}
+            </button>
+            {pageCheckStatus === 'checking' && (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-gray-400" />
+            )}
+            {pageCheckStatus === 'found' && (
+              <a
+                href={`${S3_BRAND_BASE}/${sanitizeBrandName(loadClientName.trim())}/file.html`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex shrink-0 items-center gap-1 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Visit Page
+              </a>
+            )}
+            {pageCheckStatus === 'not-found' && loadClientName.trim() && (
+              <span className="shrink-0 text-sm text-gray-400">No page found</span>
+            )}
+            {loadClientStatus === 'success' && (
+              <span className="flex shrink-0 items-center gap-1 text-sm text-green-600">
+                <CheckCircle className="h-4 w-4" /> Loaded
+              </span>
+            )}
+            {loadClientStatus === 'error' && loadClientError && (
+              <span className="flex shrink-0 items-center gap-1 text-sm text-red-600">
+                <AlertCircle className="h-4 w-4" /> {loadClientError}
+              </span>
+            )}
+          </div>
+
           <Section
             title="Placeholder sections"
             description="Add temporary cards with reference content."
@@ -1385,7 +1532,7 @@ export default function App() {
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl text-center"
+              className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl text-center"
             >
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <CheckCircle className="w-8 h-8 text-green-600" />
@@ -1397,20 +1544,52 @@ export default function App() {
                 Your branding page has been generated successfully.
               </p>
 
-              <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-6 break-all">
-                <a
-                  href={result.s3_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-indigo-600 hover:underline font-medium"
-                >
-                  {result.s3_url}
-                </a>
+              <div className="mb-3 text-left">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Branding Page
+                </p>
+                <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                  <a
+                    href={result.s3_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 truncate text-sm text-indigo-600 hover:underline"
+                  >
+                    {result.s3_url}
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => copyToClipboard(result.s3_url, 's3')}
+                    className="shrink-0 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+                  >
+                    {copiedUrl === 's3' ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
               </div>
+
+              {result.vars_url && (
+                <div className="mb-6 text-left">
+                  <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Client Data
+                  </p>
+                  <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                    <span className="flex-1 truncate text-sm text-gray-600">
+                      {result.vars_url}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(result.vars_url!, 'vars')}
+                      className="shrink-0 rounded border border-gray-300 px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+                    >
+                      {copiedUrl === 'vars' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-3 justify-center">
                 <button
-                  onClick={() => setResult(null)}
+                  onClick={() => { setResult(null); setCopiedUrl(null); }}
                   className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 font-medium"
                 >
                   Close

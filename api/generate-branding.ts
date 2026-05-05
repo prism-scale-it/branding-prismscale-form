@@ -8,6 +8,7 @@ const apiKey = process.env.BRANDING_API_KEY;
 interface BrandingResponse {
   status: string;
   s3_url: string;
+  vars_url?: string;
   [key: string]: unknown;
 }
 
