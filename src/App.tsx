@@ -79,9 +79,11 @@ const REQUIRED_FIELDS = [
   { key: "about_client_about", label: "About Client", section: "about" },
   { key: "typography_primary_font_name", label: "Primary Font Name", section: "typography" },
   { key: "typography_download_fonts", label: "Font Files (Zip)", section: "typography" },
+  { key: "logo_download_all_logos", label: "Download All Logos (Zip)", section: "logo" },
+  { key: "logo_vertical_download_link", label: "Vertical Logo", section: "logo" },
 ] as const;
 
-const REQUIRED_SECTIONS = new Set(["brand", "about", "typography"]);
+const REQUIRED_SECTIONS = new Set(["brand", "about", "typography", "logo"]);
 
 // Matches lambda_function.py _sanitize_brand_name exactly
 function sanitizeBrandName(name: string): string {
@@ -558,13 +560,21 @@ export default function App() {
         return (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-              <FileUpload
-                label="Download All Logos"
-                fieldKey="logo_download_all_logos"
-                onUploadComplete={handleInputChange}
-                currentUrl={formData.logo_download_all_logos}
-                accept=".zip"
-              />
+              <div id="field-logo_download_all_logos">
+                <FileUpload
+                  label="Download All Logos *"
+                  fieldKey="logo_download_all_logos"
+                  onUploadComplete={handleInputChange}
+                  currentUrl={formData.logo_download_all_logos}
+                  accept=".zip"
+                />
+                {validationErrors.logo_download_all_logos && (
+                  <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    {validationErrors.logo_download_all_logos}
+                  </p>
+                )}
+              </div>
               <FileUpload
                 label="Download All Secondary Logos"
                 fieldKey="logo_download_all_logos_secondary"
@@ -604,12 +614,20 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <FileUpload
-                label="Vertical Logo"
-                fieldKey="logo_vertical_download_link"
-                onUploadComplete={handleInputChange}
-                currentUrl={formData.logo_vertical_download_link}
-              />
+              <div id="field-logo_vertical_download_link">
+                <FileUpload
+                  label="Vertical Logo *"
+                  fieldKey="logo_vertical_download_link"
+                  onUploadComplete={handleInputChange}
+                  currentUrl={formData.logo_vertical_download_link}
+                />
+                {validationErrors.logo_vertical_download_link && (
+                  <p className="mt-1 text-xs text-red-500 flex items-center gap-1">
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    {validationErrors.logo_vertical_download_link}
+                  </p>
+                )}
+              </div>
               <FileUpload
                 label="Horizontal Logo"
                 fieldKey="logo_horizontal_download_link"
