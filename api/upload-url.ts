@@ -2,12 +2,12 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-const REGION = 'ap-southeast-1';
+const REGION = process.env.APP_REGION || 'ap-southeast-1';
 const BUCKET_NAME = process.env.S3_BUCKET || 'prismscales3';
 
 const createS3Client = () => {
-  const accessKeyId = process.env.AWS_ACCESS_KEY || process.env.ACCESS_KEY_ID;
-  const secretAccessKey = process.env.AWS_SECRET_KEY || process.env.SECRET_ACCESS_KEY;
+  const accessKeyId = process.env.ACCESS_KEY_ID;
+  const secretAccessKey = process.env.SECRET_ACCESS_KEY;
 
   if (!accessKeyId || !secretAccessKey) {
     return null;
